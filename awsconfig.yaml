@@ -1,0 +1,75 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template to ensure S3 bucket versioning is enabled for all existing and incoming buckets.
+
+Resources:
+  # IAM Role for SSM to manage S3 bucket versioning
+  SSMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: SSMToS3VersioningRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ssm.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: S3VersioningPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutBucketVersioning
+                  - s3:GetBucketVersioning
+                Resource: "*"
+
+  # SSM Document to enable versioning on S3 buckets
+  EnableS3VersioningDocument:
+    Type: AWS::SSM::Document
+    Properties:
+      DocumentType: Command
+      Content:
+        schemaVersion: '2.2'
+        description: Enable versioning on an S3 bucket.
+        mainSteps:
+          - action: aws:runCommand
+            name: enableS3Versioning
+            inputs:
+              DocumentType: Command
+              Parameters:
+                commands:
+                  - |
+                    aws s3api put-bucket-versioning --bucket {{ bucketName }} --versioning-configuration Status=Enabled
+                executionTimeout: ["3600"]
+
+  # AWS Config Rule to check S3 bucket versioning
+  S3VersioningConfigRule:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: s3-versioning-enabled-rule
+      Source:
+        Owner: AWS
+        SourceIdentifier: S3_BUCKET_VERSIONING_ENABLED
+      InputParameters: 
+        bucketName: "*"
+      MaximumExecutionFrequency: One_Hour
+
+  # Remediation configuration for incoming buckets
+  S3VersioningRemediation:
+    Type: AWS::Config::RemediationConfiguration
+    Properties:
+      ConfigRuleName: !Ref S3VersioningConfigRule
+      TargetType: SSM_DOCUMENT
+      TargetId: !Ref EnableS3VersioningDocument
+      Automatic: true
+      Parameters:
+        bucketName:
+          StaticValues:
+            - "AWS::Config::ResourceId"  # Reference to the bucket needing remediation
+
+Outputs:
+  SSMDocumentName:
+    Description: The name of the SSM document for enabling versioning.
+    Value: !Ref EnableS3VersioningDocument
